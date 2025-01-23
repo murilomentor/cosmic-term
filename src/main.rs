@@ -38,8 +38,7 @@ use std::{
 use tokio::sync::mpsc;
 
 use config::{
-    AppTheme, ColorScheme, ColorSchemeId, ColorSchemeKind, Config, Profile, ProfileId,
-    CONFIG_VERSION,
+    AppTheme, Bookmark, BookmarkId, BookmarkKind, ColorScheme, ColorSchemeId, ColorSchemeKind, Config, Profile, ProfileId, CONFIG_VERSION
 };
 mod config;
 mod mouse_reporter;
@@ -180,6 +179,9 @@ pub struct Flags {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     About,
+    BookmarkOpen(BookmarkId),
+    BookmarkChoice,
+    Bookmarks,
     ColorSchemes(ColorSchemeKind),
     Copy,
     CopyOrSigint,
@@ -224,6 +226,9 @@ impl Action {
     fn message(&self, entity_opt: Option<segmented_button::Entity>) -> Message {
         match self {
             Self::About => Message::ToggleContextPage(ContextPage::About),
+            Self::BookmarkOpen(bookmark_id) => Message::BookmarkOpen(*bookmark_id),
+            Self::BookmarkChoice => Message::ToggleContextPage(ContextPage::BookmarkChoice),
+            Self::Bookmarks => Message::ToggleContextPage(ContextPage::Bookmarks),
             Self::ColorSchemes(color_scheme_kind) => {
                 Message::ToggleContextPage(ContextPage::ColorSchemes(*color_scheme_kind))
             }
@@ -280,6 +285,14 @@ impl MenuAction for Action {
 #[derive(Clone, Debug)]
 pub enum Message {
     AppTheme(AppTheme),
+    BookmarkCollapse(BookmarkId),
+    BookmarkExpand(BookmarkId),
+    BookmarkKind(BookmarkId, BookmarkKind),
+    BookmarkName(BookmarkId, String),
+    BookmarkNew,
+    BookmarkOpen(BookmarkId),
+    BookmarkRemove(BookmarkId),
+    BookmarkValue(BookmarkId, String),
     ColorSchemeCollapse,
     ColorSchemeDelete(ColorSchemeKind, ColorSchemeId),
     ColorSchemeExpand(ColorSchemeKind, Option<ColorSchemeId>),
@@ -363,6 +376,8 @@ pub enum Message {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContextPage {
     About,
+    Bookmarks,
+    BookmarkChoice,
     ColorSchemes(ColorSchemeKind),
     Profiles,
     Settings,
@@ -372,6 +387,8 @@ impl ContextPage {
     fn title(&self) -> String {
         match self {
             Self::About => String::new(),
+            Self::Bookmarks => fl!("bookmarks"),
+            Self::BookmarkChoice => fl!("open-bookmark"),
             Self::ColorSchemes(_color_scheme_kind) => fl!("color-schemes"),
             Self::Profiles => fl!("profiles"),
             Self::Settings => fl!("settings"),
@@ -418,6 +435,8 @@ pub struct App {
     color_scheme_tab_model: widget::segmented_button::SingleSelectModel,
     profile_expanded: Option<ProfileId>,
     show_advanced_font_settings: bool,
+    bookmark_expanded: Option<BookmarkId>,
+    bookmark_kinds_options: Vec<String>,
     modifiers: Modifiers,
 }
 
@@ -542,6 +561,18 @@ impl App {
                         }
                         terminal.set_config(&self.config, &self.themes);
                     }
+                }
+            }
+        }
+        Command::none()
+    }
+
+    fn save_bookmarks(&mut self) -> Command<Message> {
+        if let Some(ref config_handler) = self.config_handler {
+            match config_handler.set("bookmarks", &self.config.bookmarks) {
+                Ok(()) => {}
+                Err(err) => {
+                    log::error!("failed to save config: {}", err);
                 }
             }
         }
@@ -720,6 +751,163 @@ impl App {
         .align_items(Alignment::Center)
         .spacing(space_xxs)
         .into()
+    }
+
+    fn bookmarks(&self) -> Element<Message> {
+        let cosmic_theme::Spacing {
+            space_s,
+            space_xs,
+            space_xxs,
+            space_xxxs,
+            ..
+        } = self.core().system_theme().cosmic().spacing;
+
+        let mut sections = Vec::with_capacity(2);
+
+        if !self.config.bookmarks.is_empty() {
+            let mut bookmarks_section = widget::settings::view_section("");
+            for (bookmark_name, bookmark_id) in self.config.bookmark_names() {
+                let Some(bookmark) = self.config.bookmarks.get(&bookmark_id) else {
+                    continue;
+                };
+
+                let expanded = self.bookmark_expanded == Some(bookmark_id);
+
+                bookmarks_section = bookmarks_section.add(
+                    widget::settings::item::builder(bookmark_name).control(
+                        widget::row::with_children(vec![
+                            widget::button(icon_cache_get("edit-delete-symbolic", 16))
+                                .on_press(Message::BookmarkRemove(bookmark_id))
+                                .style(style::Button::Icon)
+                                .into(),
+                            if expanded {
+                                widget::button(icon_cache_get("go-up-symbolic", 16))
+                                    .on_press(Message::BookmarkCollapse(bookmark_id))
+                            } else {
+                                widget::button(icon_cache_get("go-down-symbolic", 16))
+                                    .on_press(Message::BookmarkExpand(bookmark_id))
+                            }
+                            .style(style::Button::Icon)
+                            .into(),
+                        ])
+                        .align_items(Alignment::Center)
+                        .spacing(space_xxs),
+                    ),
+                );
+
+                if expanded {
+
+                    let expanded_section = widget::settings::view_section("")
+                        .add(
+                            widget::settings::item::builder(fl!("bookmark-kind")).control(
+                                widget::dropdown(
+                                    &self.bookmark_kinds_options,
+                                    match bookmark.bookmark_kind {
+                                        BookmarkKind::Command => Some(0),
+                                        BookmarkKind::Path => Some(1),
+                                    },
+                                    move |kind_i| {
+                                         Message::BookmarkKind(bookmark_id, match kind_i {
+                                             0 => BookmarkKind::Command,
+                                             _ => BookmarkKind::Path,
+                                        })
+                                    },
+                                ),
+                            ),
+                        )
+                        .add(
+                            widget::column::with_children(vec![
+                                widget::column::with_children(vec![
+                                    widget::text(fl!("name")).into(),
+                                    widget::text_input("", &bookmark.name)
+                                        .on_input(move |text| {
+                                            Message::BookmarkName(bookmark_id, text)
+                                        })
+                                        .into(),
+                                ])
+                                .spacing(space_xxxs)
+                                .into(),
+                                widget::column::with_children(vec![
+                                    widget::text(fl!("command-line")).into(),
+                                    widget::text_input("", &bookmark.value)
+                                        .on_input(move |text| {
+                                            Message::BookmarkValue(bookmark_id, text)
+                                        })
+                                        .into(),
+                                ])
+                                .spacing(space_xxxs)
+                                .into(),
+                            ])
+                            .padding([0, space_s])
+                            .spacing(space_xs),
+                        );
+
+                    let padding = Padding {
+                        top: 0.0,
+                        bottom: 0.0,
+                        left: space_s.into(),
+                        right: space_s.into(),
+                    };
+                    bookmarks_section =
+                        bookmarks_section.add(widget::container(expanded_section).padding(padding))
+                }
+            }
+            sections.push(bookmarks_section.into());
+        }
+
+        let add_bookmark = widget::row::with_children(vec![
+            widget::horizontal_space(Length::Fill).into(),
+            widget::button::standard(fl!("add-bookmark"))
+                .on_press(Message::BookmarkNew)
+                .into(),
+        ]);
+        sections.push(add_bookmark.into());
+
+        widget::settings::view_column(sections).into()
+    }
+
+    fn bookmark_choice(&self) -> Element<Message> {
+        let cosmic_theme::Spacing {
+            space_xs,
+            space_xxs,
+            ..
+        } = self.core().system_theme().cosmic().spacing;
+
+        let mut column = widget::column().spacing(space_xxs);
+
+        if !self.config.bookmarks.is_empty() {
+            // let mut bookmarks_section = widget::settings::view_section("");
+
+            for (bookmark_name, bookmark_id) in self.config.bookmark_names() {
+                let Some(_bookmark) = self.config.bookmarks.get(&bookmark_id) else {
+                    continue;
+                };
+                // bookmarks_section = bookmarks_section.add(
+                column = column.push(
+                    widget::button(
+                        widget::row::with_children(vec![
+                            //widget::icon(icon_cache_get("list-add-symbolic", 16)),
+                            widget::text(bookmark_name).into(),
+                        ])
+                        .spacing(space_xs),
+                    )
+                    .on_press(Message::BookmarkOpen(bookmark_id))
+                    .padding(space_xs)
+                    .width(Length::Fill)
+                );
+            }
+            // sections.push(bookmarks_section.into());
+        }
+
+        // let add_bookmark = widget::row::with_children(vec![
+        //     widget::horizontal_space(Length::Fill).into(),
+        //     widget::button::standard(fl!("add-bookmark"))
+        //         .on_press(Message::BookmarkNew)
+        //         .into(),
+        // ]);
+        // sections.push(add_bookmark.into());
+
+        column.into()
     }
 
     fn color_schemes(&self, color_scheme_kind: ColorSchemeKind) -> Element<Message> {
@@ -1210,6 +1398,7 @@ impl App {
         ])
         .into()
     }
+
     fn get_default_profile(&self) -> Option<ProfileId> {
         self.config.default_profile
     }
@@ -1340,6 +1529,24 @@ impl App {
             }
         }
         self.update_title(Some(pane))
+    }
+
+    fn open_bookmark_in_terminal( &mut self, bookmark_id: BookmarkId) -> Command<Message> {
+        if let Some(tab_model) = self.pane_model.active() { // pega o pane ativo
+            let entity = tab_model.active(); // pega o tab_model ativo --- mudar a action pra receber o entity_opt
+            if let Some(terminal) = tab_model.data::<Mutex<Terminal>>(entity) { // pega o terminal da aba
+                let terminal = terminal.lock().unwrap(); // aguarda lock do terminal
+                if let Some(bookmark) = self.config.bookmarks.get_mut(&bookmark_id) {
+                    let bookmark_value = bookmark.value.clone();
+                    let shell_command = match bookmark.bookmark_kind {
+                        BookmarkKind::Command => format!("{bookmark_value}"),
+                        BookmarkKind::Path => format!("cd {bookmark_value}"),
+                    };
+                    terminal.paste(shell_command);
+                }
+            }
+        }
+        self.update(Message::ToggleContextPage(ContextPage::BookmarkChoice))
     }
 }
 
@@ -1509,6 +1716,8 @@ impl Application for App {
             color_scheme_tab_model: widget::segmented_button::Model::default(),
             profile_expanded: None,
             show_advanced_font_settings: false,
+            bookmark_expanded: None,
+            bookmark_kinds_options: vec![fl!("bookmark-command"), fl!("bookmark-path")], // TODO: i18n
             modifiers: Modifiers::empty(),
         };
 
@@ -1568,7 +1777,53 @@ impl Application for App {
             Message::AppTheme(app_theme) => {
                 config_set!(app_theme, app_theme);
                 return self.update_config();
+            },
+            Message::BookmarkCollapse(_bookmark_id) => {
+                self.bookmark_expanded = None;
+            },
+            Message::BookmarkValue(bookmark_id, text) => {
+                if let Some(bookmark) = self.config.bookmarks.get_mut(&bookmark_id) {
+                    bookmark.value = text;
+                    return self.save_bookmarks();
+                }
+            },
+            Message::BookmarkExpand(bookmark_id) => {
+                self.bookmark_expanded = Some(bookmark_id);
+            },
+            Message::BookmarkKind(bookmark_id, kind) => {
+                if let Some(bookmark) = self.config.bookmarks.get_mut(&bookmark_id) {
+                    bookmark.bookmark_kind = kind;
+                    return self.save_bookmarks();
+                }
+            },
+            Message::BookmarkNew => {
+                // Get next bookmark ID
+                let bookmark_id = self
+                    .config
+                    .bookmarks
+                    .last_key_value()
+                    .map(|(id, _)| BookmarkId(id.0 + 1))
+                    .unwrap_or_default();
+                self.config.bookmarks.insert(bookmark_id, Bookmark::default());
+                self.bookmark_expanded = Some(bookmark_id);
+                return self.save_bookmarks();
             }
+            Message::BookmarkName(bookmark_id, text) => {
+                if let Some(bookmark) = self.config.bookmarks.get_mut(&bookmark_id) {
+                    bookmark.name = text;
+                    return self.save_bookmarks();
+                }
+            },
+            Message::BookmarkOpen(bookmark_id) => {
+                return Command::batch([
+                    self.open_bookmark_in_terminal(bookmark_id),
+                    self.update_focus(),
+                ]);
+            },
+            Message::BookmarkRemove(bookmark_id) => {
+                self.config.bookmarks.remove(&bookmark_id);
+                return self.save_bookmarks();
+            },
             Message::ColorSchemeCollapse => {
                 self.color_scheme_expanded = None;
             }
@@ -2570,6 +2825,8 @@ impl Application for App {
 
         Some(match self.context_page {
             ContextPage::About => self.about(),
+            ContextPage::Bookmarks => self.bookmarks(),
+            ContextPage::BookmarkChoice => self.bookmark_choice(),
             ContextPage::ColorSchemes(color_scheme_kind) => self.color_schemes(color_scheme_kind),
             ContextPage::Profiles => self.profiles(),
             ContextPage::Settings => self.settings(),

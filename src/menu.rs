@@ -198,6 +198,7 @@ pub fn menu_bar<'a>(config: &Config, key_binds: &HashMap<KeyBind, Action>) -> El
                     MenuItem::Button(fl!("split-vertical"), Action::PaneSplitVertical),
                     MenuItem::Button(fl!("pane-toggle-maximize"), Action::PaneToggleMaximized),
                     MenuItem::Divider,
+                    MenuItem::Button(fl!("menu-bookmarks"), Action::Bookmarks),
                     MenuItem::Button(
                         fl!("menu-color-schemes"),
                         Action::ColorSchemes(config.color_scheme_kind()),

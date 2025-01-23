@@ -216,6 +216,36 @@ impl Default for Profile {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum BookmarkKind {
+    Command,
+    Path,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct BookmarkId(pub u64);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Bookmark {
+    // #[serde(default)]
+    pub name: String,
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    pub bookmark_kind: BookmarkKind,
+    // #[serde(default)]
+    pub value: String,
+}
+
+impl Default for Bookmark {
+    fn default() -> Self {
+        Self {
+            name: fl!("new-bookmark"),
+            bookmark_kind: BookmarkKind::Command,
+            value: String::new(),
+        }
+    }
+}
+
 #[derive(Clone, CosmicConfigEntry, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Config {
     pub app_theme: AppTheme,
@@ -236,6 +266,7 @@ pub struct Config {
     pub syntax_theme_light: String,
     pub focus_follow_mouse: bool,
     pub default_profile: Option<ProfileId>,
+    pub bookmarks: BTreeMap<BookmarkId, Bookmark>,
 }
 
 impl Default for Config {
@@ -243,6 +274,7 @@ impl Default for Config {
         Self {
             app_theme: AppTheme::System,
             bold_font_weight: Weight::BOLD.0,
+            bookmarks: BTreeMap::new(),
             color_schemes_dark: BTreeMap::new(),
             color_schemes_light: BTreeMap::new(),
             dim_font_weight: Weight::NORMAL.0,
@@ -385,5 +417,29 @@ impl Config {
                 Normal, SemiExpanded, Expanded, ExtraExpanded, UltraExpanded,
             }
         })[&self.font_stretch]
+    }
+
+    pub fn bookmark_names(&self) -> Vec<(String, BookmarkId)> {
+        let mut bookmark_names = Vec::<(String, BookmarkId)>::with_capacity(self.bookmarks.len());
+        for (bookmark_id, bookmark) in &self.bookmarks {
+            let mut name = bookmark.name.clone();
+            let mut copies = 1;
+            while bookmark_names.iter().any(|x| x.0 == name) {
+                copies += 1;
+                name = format!("{} ({})", bookmark.name, copies);
+            }
+            bookmark_names.push((name, *bookmark_id));
+        }
+        bookmark_names.sort_by(|a, b| LANGUAGE_SORTER.compare(&a.0, &b.0));
+        bookmark_names
+    }
+
+    pub fn bookmark_info(&self, bookmark_id_opt: Option<BookmarkId>) -> (String, BookmarkKind) {
+        let (bookmark_command, bookmark_kind) = match bookmark_id_opt.and_then(|bookmark_id| self.bookmarks.get(&bookmark_id))
+        {
+            Some(bookmark) =>  (bookmark.value.clone(), bookmark.bookmark_kind.clone()),
+            None => (String::new(), BookmarkKind::Command),
+        };
+        (bookmark_command, bookmark_kind)
     }
 }

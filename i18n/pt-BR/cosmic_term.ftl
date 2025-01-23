@@ -6,6 +6,16 @@ new-terminal = Novo terminal
 ## About
 git-description = Commit do git {$hash} em {$date}
 
+## Bookmarks
+bookmarks = Favoritos
+add-bookmark = Adicionar favorito
+new-bookmark = Novo favorito
+delete-bookmark = Excluir favorito
+open-bookmark = Abrir favorito
+bookmark-command = Comando do shell
+bookmark-path = Caminho de diretório
+bookmark-kind = Tipo de favorito
+
 ## Color schemes
 color-schemes = Esquemas de cores
 rename = Renomear
@@ -91,6 +101,7 @@ previous-tab = Aba anterior
 split-horizontal = Dividir horizontalmente
 split-vertical = Dividir verticalmente
 pane-toggle-maximize = Alternar maximização
+menu-bookmarks = Favoritos...
 menu-color-schemes = Esquemas de cores...
 menu-settings = Configurações...
 menu-about = Sobre COSMIC Terminal...
